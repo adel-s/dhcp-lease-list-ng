@@ -153,6 +153,15 @@ sudo ln -s /usr/local/sbin/dhcp-lease-list-ng /usr/sbin/dhcp-lease-list
 
 - IPv4 leases only (`dhcpd.leases`); DHCPv6 leases (`dhcpd6.leases`) are not supported yet.
 
+## Tests
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+The tests use only the standard library and run on Python 3.4+; `tests/sample.leases` covers the tricky cases of the
+leases file format.
+
 ## Development
 
 I don't accept pull requests, sorry: my code, my rules. But if something doesn't work or you need a new feature,
