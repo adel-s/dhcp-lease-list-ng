@@ -1,4 +1,6 @@
-# dhcp-lease-list-ng [![tests](https://github.com/adel-s/dhcp-lease-list-ng/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/adel-s/dhcp-lease-list-ng/actions/workflows/tests.yml)
+[![tests](https://github.com/adel-s/dhcp-lease-list-ng/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/adel-s/dhcp-lease-list-ng/actions/workflows/tests.yml)
+
+# dhcp-lease-list-ng
 
 ## What
 
