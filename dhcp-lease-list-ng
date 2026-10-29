@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""List ISC dhcpd leases.
+
+A drop-in replacement for the Perl dhcp-lease-list script shipped with
+isc-dhcp-server. Standard library only, runs on any Python 3.4+.
+
+Copyright (c) 2026 Adel-S (https://github.com/adel-s/dhcp-lease-list-ng)
+SPDX-License-Identifier: MIT
+"""
+
+import argparse
+import calendar
+import os
+import re
+import signal
+import sys
+import time
+from collections import OrderedDict
+
+__version__ = '1.0.0'
+
+LEASE_FILES = ('/var/db/dhcpd.leases', '/var/lib/dhcp/dhcpd.leases', '/var/lib/dhcp3/dhcpd.leases',
+               '/var/lib/dhcpd/dhcpd.leases')
+OUI_FILES = ('/usr/share/ieee-data/oui.txt', '/usr/share/misc/oui.txt', '/usr/local/etc/oui.txt')
+
+TIME_KEYS = ('starts', 'ends', 'tstp', 'tsfp', 'atsfp', 'cltt')
+LEASE_START = re.compile(r'^lease\s+(\d+\.\d+\.\d+\.\d+)\s*\{$')
+OUI_LINE = re.compile(r'^([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2})\s+\(hex\)\s+(.*?)\s*$')
+
+COLUMNS = (
+    ('IP Address', 'ip_address', '<'),
+    ('MAC Address', 'hardware', '<'),
+    ('Expires', 'expires', '>'),
+    ('Client Hostname', 'client-hostname', '<'),
+    ('DDNS-Name', 'ddns-fwd-name', '<'),
+    ('Vendor Class Identifier', 'vendor-class-identifier', '<'),
+    ('Binding State', 'binding-state', '<'),
+)
+
+
+def strip_statement(line: str) -> str:
+    """Cut the line at the first ';' outside of quotes, drop the rest (comments)."""
+    quoted = escaped = False
+    for i, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == '\\':
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+        elif char == ';' and not quoted:
+            return line[:i].strip()
+    return line.strip()
+
+
+def parse_time(value: str):
+    """Return epoch seconds (UTC) for '<weekday> YYYY/MM/DD HH:MM:SS' or 'epoch N', None for 'never'."""
+    parts = value.split()
+    if parts[0] == 'never':
+        return None
+    if parts[0] == 'epoch':
+        return int(parts[1])
+    return calendar.timegm(time.strptime(parts[1] + ' ' + parts[2], '%Y/%m/%d %H:%M:%S'))
+
+
+def parse_lease_line(lease: OrderedDict, line: str) -> None:
+    words = line.split()
+    key = words[0]
+    if key in TIME_KEYS and len(words) > 1:
+        lease[key] = parse_time(' '.join(words[1:]))
+    elif words[:2] == ['binding', 'state'] and len(words) == 3:
+        lease['binding-state'] = words[2]
+    elif key in ('next', 'rewind') and words[1:3] == ['binding', 'state'] and len(words) == 4:
+        lease[key + '-binding-state'] = words[3]
+    elif key == 'hardware' and len(words) == 3:
+        lease['hardware'] = words[2].lower()
+    elif key == 'set' and '=' in line:
+        name, value = line[4:].split('=', 1)
+        lease[name.strip()] = value.strip().strip('"')
+    elif len(words) == 1:
+        lease[key] = True  # flags like 'abandoned', 'bootp', 'reserved'
+    else:
+        lease[key] = line[len(key):].strip().strip('"')
+
+
+def parse_dhcp_leases(content: str) -> list:
+    """Return all lease records in file order; a later record for an IP supersedes an earlier one."""
+    leases = []
+    lease = None
+    depth = 0
+    for raw_line in content.splitlines():
+        line = strip_statement(raw_line)
+        if not line or line.startswith('#'):
+            continue
+        if depth == 0:
+            match = LEASE_START.match(line)
+            if match:
+                lease = OrderedDict([('ip_address', match.group(1))])
+            depth += line.count('{') - line.count('}')
+            continue
+        if line.endswith('{'):
+            depth += 1
+        elif line == '}':
+            depth -= 1
+            if depth == 0 and lease is not None:
+                leases.append(lease)
+                lease = None
+        elif depth == 1 and lease is not None:
+            parse_lease_line(lease, line)
+    return leases
+
+
+def is_active(lease: dict, now: float) -> bool:
+    if lease.get('binding-state', 'active') != 'active':
+        return False
+    ends = lease.get('ends', 0)
+    return ends is None or ends > now
+
+
+def select_leases(leases: list, keep: str, now: float) -> list:
+    """keep: 'active' - current active lease per IP, 'last' - last record per MAC, 'all' - every record."""
+    if keep == 'all':
+        selected = leases
+    elif keep == 'last':
+        last = OrderedDict()
+        for lease in leases:
+            last[lease.get('hardware') or lease['ip_address']] = lease
+        selected = list(last.values())
+    else:
+        current = OrderedDict()
+        for lease in leases:
+            current[lease['ip_address']] = lease
+        selected = [lease for lease in current.values() if is_active(lease, now)]
+    return sorted(selected, key=lambda lease: tuple(int(octet) for octet in lease['ip_address'].split('.')))
+
+
+def load_oui(paths) -> dict:
+    for path in paths:
+        if os.path.isfile(path):
+            vendors = {}
+            with open(path, encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    match = OUI_LINE.match(line)
+                    if match:
+                        vendors[':'.join(match.group(1, 2, 3)).lower()] = match.group(4)
+            return vendors
+    return {}
+
+
+def format_time(epoch, utc: bool) -> str:
+    if epoch is None:
+        return 'never'
+    return time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(epoch) if utc else time.localtime(epoch))
+
+
+def format_expires(ends, now: float) -> str:
+    if ends is None:
+        return 'never'
+    seconds = int(ends - now)
+    if seconds <= 0:
+        return 'expired'
+    days, seconds = divmod(seconds, 86400)
+    clock = '%d:%02d:%02d' % (seconds // 3600, seconds // 60 % 60, seconds % 60)
+    return ('%d day%s, %s' % (days, '' if days == 1 else 's', clock)) if days else clock
+
+
+def find_lease_file(path):
+    if path:
+        return path
+    for candidate in LEASE_FILES:
+        if os.path.isfile(candidate):
+            return candidate
+    sys.exit('dhcp-lease-list-ng: cannot find a leases file, tried: ' + ', '.join(LEASE_FILES))
+
+
+def print_table(rows: list, now: float) -> None:
+    widths = [max([len(title)] + [len(str(row.get(key, ''))) for row in rows]) for title, key, _ in COLUMNS]
+    separator = '+-' + '-+-'.join('-' * width for width in widths) + '-+'
+    print(separator)
+    print('| ' + 'DHCPD LEASES STATUS'.center(len(separator) - 4) + ' |')
+    print(separator)
+    print('| ' + ' | '.join(title.center(width) for (title, _, _), width in zip(COLUMNS, widths)) + ' |')
+    print(separator)
+    for row in rows:
+        print('| ' + ' | '.join(format(str(row.get(key, '')), align + str(width))
+                               for (_, key, align), width in zip(COLUMNS, widths)) + ' |')
+    print(separator)
+    print('Total Leases: ' + str(len(rows)))
+    print('Report generated: ' + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)))
+
+
+def print_parsable(leases: list, vendors: dict) -> None:
+    """Same line format as the Perl dhcp-lease-list --parsable, dates in UTC."""
+    for lease in leases:
+        mac = lease.get('hardware', '-NA-')
+        print('MAC %s IP %s HOSTNAME %s BEGIN %s END %s MANUFACTURER %s' % (
+            mac, lease['ip_address'], lease.get('client-hostname', '-NA-'),
+            format_time(lease.get('starts'), True), format_time(lease.get('ends'), True),
+            vendors.get(mac[:8], '-NA-')))
+
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(
+        prog='dhcp-lease-list-ng',
+        description='List ISC dhcpd leases. By default shows the current active lease of every IP address.')
+    keep = parser.add_mutually_exclusive_group()
+    keep.add_argument('-a', '--all', dest='keep', action='store_const', const='all',
+                      help='show every record from the leases file, including expired and superseded ones')
+    keep.add_argument('-l', '--last', dest='keep', action='store_const', const='last',
+                      help='show the last record of every MAC address, even if it has expired')
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument('-j', '--json', action='store_true', help='output in JSON format')
+    output.add_argument('-p', '--parsable', action='store_true',
+                        help='one line per lease, same format as the Perl dhcp-lease-list --parsable')
+    parser.add_argument('-f', '--file', '--lease', dest='file', metavar='FILE',
+                        help='leases file (default: the first found of %s)' % ', '.join(LEASE_FILES))
+    parser.add_argument('-u', '--utc', action='store_true', help='show times in UTC instead of local time')
+    parser.add_argument('-V', '--version', action='version', version='%(prog)s ' + __version__)
+    args = parser.parse_args(argv)
+
+    path = find_lease_file(args.file)
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except OSError as error:
+        sys.exit('dhcp-lease-list-ng: %s: %s' % (path, error.strerror))
+
+    now = time.time()
+    leases = select_leases(parse_dhcp_leases(content), args.keep or 'active', now)
+
+    if args.parsable:
+        print_parsable(leases, load_oui(OUI_FILES))
+        return
+
+    vendors = load_oui(OUI_FILES) if args.json else {}
+    rows = []
+    for lease in leases:
+        row = OrderedDict(lease)
+        for key in TIME_KEYS:
+            if key in row:
+                row[key] = format_time(row[key], args.utc)
+        row['expires'] = format_expires(lease.get('ends', 0), now)
+        if lease.get('hardware', '')[:8] in vendors:
+            row['manufacturer'] = vendors[lease['hardware'][:8]]
+        rows.append(row)
+
+    if args.json:
+        try:
+            import json  # not in Ubuntu's python3-minimal, so imported only when needed
+        except ImportError:
+            sys.exit('dhcp-lease-list-ng: --json needs the json module, install the python3 package')
+        print(json.dumps(rows, indent=4))
+    else:
+        print_table(rows, now)
+
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # quiet exit on '| head'
+    main()
