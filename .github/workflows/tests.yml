@@ -1,0 +1,23 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - master
+      - 'dev/**'
+
+jobs:
+  unittest:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # setup-python has no builds of the oldest versions, so every version runs in its official Docker image
+        python: ['3.4', '3.5', '3.6', '3.7', '3.8', '3.9', '3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run unit tests
+        run: >
+          docker run --rm -v "$PWD:/src:ro" -w /src -e PYTHONDONTWRITEBYTECODE=1
+          python:${{ matrix.python }}-slim python3 -m unittest discover -s tests -v

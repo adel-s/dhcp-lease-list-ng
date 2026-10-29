@@ -1,4 +1,4 @@
-# dhcp-lease-list-ng
+# dhcp-lease-list-ng [![tests](https://github.com/adel-s/dhcp-lease-list-ng/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/adel-s/dhcp-lease-list-ng/actions/workflows/tests.yml)
 
 ## What
 
@@ -23,37 +23,6 @@ $ sudo dhcp-lease-list-ng
 Total Leases: 4
 Report generated: 2026-10-28 18:44:38
 ```
-
-## Why
-
-Although **ISC DHCP (`dhcpd`) officially reached End of Life in 2022**, with its last maintenance release on
-October 5, 2022 (see the [announcement by the Internet Systems Consortium of October 4, 2022](https://www.isc.org/blogs/isc-dhcp-eol/)),
-it remains widely deployed.
-
-ISC discontinued maintenance of the legacy DHCP server and recommends migrating to its modern replacement,
-[Kea DHCP](https://www.isc.org/dhcp_migration/).
-
-The scale of its continued usage is illustrated by Debian's Popularity Contest statistics: as of mid-2025,
-approximately **8,000 participating Debian systems still had `isc-dhcp-server` installed**, compared to only around
-**180 installations of Kea**, according to a [discussion among Debian developers](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1106121).
-
-These numbers represent only a voluntary sample of Debian installations, not worldwide deployment figures. The actual
-global installed base remains unknown, but the data demonstrates that ISC DHCP continued to have a substantial
-presence years after its official EOL. Debian 13 (trixie) still ships it, but the package was removed from Debian
-testing in February 2026, so it is not expected in Debian 14.
-
-So many admins still read `dhcpd.leases` every day, and the script for it deserves a better version. The original
-`dhcp-lease-list` works, but:
-
-- it shows only MAC, IP, hostname, end date and manufacturer, and cuts hostnames at 14 characters;
-- it prints dates in UTC, so on a server in any other time zone you have to convert them in your head;
-- it has no JSON output;
-- its manufacturer lookup reads `/usr/share/misc/oui.txt`, but the Debian/Ubuntu `ieee-data` package installs the
-  file as `/usr/share/ieee-data/oui.txt`, so on those systems the lookup never works;
-- it silently skips leases without an end date, such as infinite (`ends never;`) leases.
-
-`dhcp-lease-list-ng` also shows the DDNS name, the vendor class identifier and the binding state, shows the time
-left until each lease expires, sizes the table columns to fit the data, and prints times in local time.
 
 ## Install
 
@@ -149,6 +118,37 @@ sudo dpkg-divert --local --rename --add /usr/sbin/dhcp-lease-list
 sudo ln -s /usr/local/sbin/dhcp-lease-list-ng /usr/sbin/dhcp-lease-list
 ```
 
+## Why
+
+Although **ISC DHCP (`dhcpd`) officially reached End of Life in 2022**, with its last maintenance release on
+October 5, 2022 (see the [announcement by the Internet Systems Consortium of October 4, 2022](https://www.isc.org/blogs/isc-dhcp-eol/)),
+it remains widely deployed.
+
+ISC discontinued maintenance of the legacy DHCP server and recommends migrating to its modern replacement,
+[Kea DHCP](https://www.isc.org/dhcp_migration/).
+
+The scale of its continued usage is illustrated by Debian's Popularity Contest statistics: as of mid-2025,
+approximately **8,000 participating Debian systems still had `isc-dhcp-server` installed**, compared to only around
+**180 installations of Kea**, according to a [discussion among Debian developers](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1106121).
+
+These numbers represent only a voluntary sample of Debian installations, not worldwide deployment figures. The actual
+global installed base remains unknown, but the data demonstrates that ISC DHCP continued to have a substantial
+presence years after its official EOL. Debian 13 (trixie) still ships it, but the package was removed from Debian
+testing in February 2026, so it is not expected in Debian 14.
+
+So many admins still read `dhcpd.leases` every day, and the script for it deserves a better version. The original
+`dhcp-lease-list` works, but:
+
+- it shows only MAC, IP, hostname, end date and manufacturer, and cuts hostnames at 14 characters;
+- it prints dates in UTC, so on a server in any other time zone you have to convert them in your head;
+- it has no JSON output;
+- its manufacturer lookup reads `/usr/share/misc/oui.txt`, but the Debian/Ubuntu `ieee-data` package installs the
+  file as `/usr/share/ieee-data/oui.txt`, so on those systems the lookup never works;
+- it silently skips leases without an end date, such as infinite (`ends never;`) leases.
+
+`dhcp-lease-list-ng` also shows the DDNS name, the vendor class identifier and the binding state, shows the time
+left until each lease expires, sizes the table columns to fit the data, and prints times in local time.
+
 ## Notes
 
 - IPv4 leases only (`dhcpd.leases`); DHCPv6 leases (`dhcpd6.leases`) are not supported (yet).
@@ -161,6 +161,8 @@ python3 -m unittest discover -s tests
 
 The tests use only the standard library and run on Python 3.4+; `tests/sample.leases` covers the tricky cases of the
 leases file format.
+
+GitHub Actions runs them on every Python version from 3.4 to 3.15 on each push to `master` and `dev/*` branches.
 
 ## Development
 
