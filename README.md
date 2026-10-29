@@ -151,7 +151,7 @@ sudo ln -s /usr/local/sbin/dhcp-lease-list-ng /usr/sbin/dhcp-lease-list
 
 ## Notes
 
-- IPv4 leases only (`dhcpd.leases`); DHCPv6 leases (`dhcpd6.leases`) are not supported yet.
+- IPv4 leases only (`dhcpd.leases`); DHCPv6 leases (`dhcpd6.leases`) are not supported (yet).
 
 ## Tests
 
